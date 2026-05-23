@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -91,6 +92,15 @@ class LocalGitClient:
         # 单仓库模式：default_repo_path 本身是 git
         if self._is_git_repo(self.default_repo_path):
             return True
+        # 自动容器模式：default_repo_path 不是 git，但其下有 git 子目录
+        auto_children = self._list_git_children(self.default_repo_path)
+        if auto_children:
+            logger.info(
+                "Local git ready (auto container mode): root=%s, repos=%d",
+                self.default_repo_path,
+                len(auto_children),
+            )
+            return True
         # 多仓库容器模式：repo_root 下任意子目录是 git 即视为已启用
         if self.repo_root and self.repo_root.exists():
             try:
@@ -105,6 +115,34 @@ class LocalGitClient:
             except OSError:
                 pass
         return False
+
+    @staticmethod
+    def _list_git_children(path: Path) -> List[Path]:
+        skip_dirs = {
+            ".git",
+            ".hg",
+            ".svn",
+            ".idea",
+            ".vscode",
+            ".cursor",
+            "node_modules",
+            ".venv",
+            "venv",
+            "__pycache__",
+        }
+        repos: List[Path] = []
+        if not path.exists():
+            return repos
+        try:
+            for dirpath, dirnames, _ in os.walk(path, topdown=True):
+                if ".git" in dirnames:
+                    repos.append(Path(dirpath))
+                    dirnames[:] = []
+                    continue
+                dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        except OSError:
+            return []
+        return sorted(repos, key=lambda p: str(p))
 
     def _is_git_repo(self, path: Path) -> bool:
         key = str(path)

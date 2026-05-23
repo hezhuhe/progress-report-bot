@@ -164,22 +164,56 @@ class Config:
                 out[k] = v
         return out
 
+    _REPO_SCAN_SKIP_DIRS = {
+        ".git",
+        ".hg",
+        ".svn",
+        ".idea",
+        ".vscode",
+        ".cursor",
+        "node_modules",
+        ".venv",
+        "venv",
+        "__pycache__",
+    }
+
+    @staticmethod
+    def _list_git_children(root_path: Path) -> list:
+        """递归列出 root_path 下所有 git 仓库路径。"""
+        if not root_path.exists():
+            return []
+        repos: set[str] = set()
+        try:
+            for dirpath, dirnames, _ in os.walk(root_path, topdown=True):
+                # 命中仓库根：记录并停止继续深入，避免扫进仓库内部。
+                if ".git" in dirnames:
+                    repos.add(str(Path(dirpath).resolve()))
+                    dirnames[:] = []
+                    continue
+                # 按目录名剪枝，避免进入海量/无关目录。
+                dirnames[:] = [
+                    d for d in dirnames if d not in Config._REPO_SCAN_SKIP_DIRS
+                ]
+        except OSError:
+            return []
+        return sorted(repos)
+
     def list_container_repo_paths(self) -> list:
-        """LOCAL_GIT_REPO_ROOT 下所有含 .git 的子目录（容器模式全量扫描用）。"""
+        """容器模式仓库列表。
+
+        优先读取 ``LOCAL_GIT_REPO_ROOT``；若未配置，则尝试自动把
+        ``LOCAL_GIT_REPO_PATH`` 视为工作目录容器（该目录自身不是 git、但子目录有 git）。
+        """
         root = self.local_git_repo_root.strip()
         if not root:
-            return []
+            fallback = Path(self.local_git_repo_path.strip() or ".").resolve()
+            if not fallback.exists() or (fallback / ".git").exists():
+                return []
+            return self._list_git_children(fallback)
         root_path = Path(root)
         if not root_path.exists():
             return []
-        paths: list = []
-        try:
-            for child in sorted(root_path.iterdir()):
-                if child.is_dir() and (child / ".git").exists():
-                    paths.append(str(child.resolve()))
-        except OSError:
-            pass
-        return paths
+        return self._list_git_children(root_path)
 
     def resolve_repo_paths(self, repo_ids: list) -> list:
         """把工作项的 repos 字段（short code 列表）映射到本地仓库路径列表。
@@ -214,6 +248,11 @@ class Config:
                 continue
             seen.add(path)
             results.append((path, _P(path).name))
+
+        if not results:
+            auto_container = self.list_container_repo_paths()
+            if auto_container:
+                return [(p, _P(p).name) for p in auto_container]
 
         if not results and self.local_git_repo_path:
             results.append((self.local_git_repo_path, _P(self.local_git_repo_path).name))

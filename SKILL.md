@@ -41,8 +41,8 @@ number (or "skip").
 `cd` into the directory the user wants analyzed. This is where `.env` and `data/`
 live.
 
-**Git container rule:** if cwd has **one or more child directories each
-containing `.git`**, treat cwd as a monorepo container — set
+**Git container rule:** if cwd has **one or more nested subdirectories containing
+`.git` (recursive scan)**, treat cwd as a monorepo container — set
 `LOCAL_GIT_REPO_ROOT=<cwd>` and scan **all** sub-repos (do not pick just one).
 If cwd itself is the only git repo, use `LOCAL_GIT_REPO_PATH=<cwd>`.
 
@@ -50,7 +50,7 @@ Detect by listing cwd (no command needed):
 
 | cwd shape | `.env` git settings |
 |---|---|
-| ≥1 child dirs with `.git` | `GIT_PROVIDER=local`, `LOCAL_GIT_REPO_ROOT=<cwd>` |
+| 递归发现 ≥1 nested dirs with `.git` | `GIT_PROVIDER=local`, `LOCAL_GIT_REPO_ROOT=<cwd>` |
 | cwd itself has `.git`, no sub-repos | `GIT_PROVIDER=local`, `LOCAL_GIT_REPO_PATH=<cwd>` |
 | no git | `GIT_PROVIDER=none` |
 

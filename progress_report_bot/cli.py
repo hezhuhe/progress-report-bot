@@ -268,7 +268,7 @@ def cmd_run_all(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def cmd_repos(cfg: Config, args: argparse.Namespace) -> int:
-    """诊断：本地容器目录子仓库 + 飞书出现过的 short code + 当前映射缺口。"""
+    """诊断：本地容器目录子仓库（递归）+ 飞书 short code 映射缺口。"""
     import subprocess
     from pathlib import Path as _P
 
@@ -277,29 +277,30 @@ def cmd_repos(cfg: Config, args: argparse.Namespace) -> int:
     print("    LOCAL_GIT_REPO_ROOT =", cfg.local_git_repo_root or "(空)")
     print("    LOCAL_GIT_REPO_PATH =", cfg.local_git_repo_path)
 
-    print("\n[2] 容器目录子仓库（候选 mapping 目标）：")
+    print("\n[2] 容器目录子仓库（递归，候选 mapping 目标）：")
     sub_repos: list = []
-    if cfg.local_git_repo_root:
-        root = _P(cfg.local_git_repo_root)
-        if root.exists():
-            for d in sorted(root.iterdir()):
-                if not d.is_dir() or not (d / ".git").exists():
-                    continue
-                try:
-                    remote = subprocess.check_output(
-                        ["git", "-C", str(d), "remote", "get-url", "origin"],
-                        encoding="utf-8",
-                        stderr=subprocess.DEVNULL,
-                        timeout=5,
-                    ).strip()
-                except Exception:
-                    remote = ""
-                sub_repos.append((d.name, remote))
-                print(f"  - {d.name:45}  {remote}")
-        else:
-            print(f"  ⚠ 路径不存在: {root}")
+    root = _P(cfg.local_git_repo_root or cfg.local_git_repo_path).resolve()
+    if not root.exists():
+        print(f"  ⚠ 路径不存在: {root}")
     else:
-        print("  (未配置 LOCAL_GIT_REPO_ROOT)")
+        container_repos = [_P(p) for p in cfg.list_container_repo_paths()]
+        if not container_repos and (root / ".git").exists():
+            container_repos = [root]
+        for d in container_repos:
+            try:
+                remote = subprocess.check_output(
+                    ["git", "-C", str(d), "remote", "get-url", "origin"],
+                    encoding="utf-8",
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                ).strip()
+            except Exception:
+                remote = ""
+            rel = str(d.relative_to(root)) if d != root and d.is_relative_to(root) else d.name
+            sub_repos.append((rel, remote))
+            print(f"  - {rel:45}  {remote}")
+        if not sub_repos:
+            print("  (未发现任何 git 仓库)")
 
     print("\n[3] 当前 REPO_ID_MAP 解析结果：")
     mp = cfg.repo_id_map_dict
@@ -340,21 +341,19 @@ def cmd_repos(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def cmd_fetch_repos(cfg: Config, args: argparse.Namespace) -> int:
-    """对 LOCAL_GIT_REPO_ROOT 下所有子 git 仓库批量 git fetch，确保远端分支信息最新。"""
+    """对容器目录下所有 git 仓库批量 git fetch（递归），确保远端分支信息最新。"""
     import subprocess
     from pathlib import Path as _P
 
-    root = _P(cfg.local_git_repo_root or cfg.local_git_repo_path)
+    root = _P(cfg.local_git_repo_root or cfg.local_git_repo_path).resolve()
     if not root.exists():
         print(f"[error] 路径不存在: {root}", file=sys.stderr)
         return 1
 
-    targets = []
-    for d in sorted(root.iterdir()):
-        if d.is_dir() and (d / ".git").exists():
-            targets.append(d)
+    targets = [_P(p) for p in cfg.list_container_repo_paths()]
     if (root / ".git").exists() and root not in targets:
         targets.append(root)
+    targets = sorted(set(targets), key=lambda p: str(p))
 
     if not targets:
         print(f"[warn] {root} 下没找到任何 git 仓库")
@@ -370,10 +369,12 @@ def cmd_fetch_repos(cfg: Config, args: argparse.Namespace) -> int:
                 check=True,
                 timeout=60,
             )
-            print(f"  ✓ {d.name}")
+            rel = str(d.relative_to(root)) if d != root and d.is_relative_to(root) else d.name
+            print(f"  ✓ {rel}")
             ok += 1
         except Exception as e:  # noqa: BLE001
-            print(f"  ✗ {d.name}: {e}")
+            rel = str(d.relative_to(root)) if d != root and d.is_relative_to(root) else d.name
+            print(f"  ✗ {rel}: {e}")
             fail += 1
     print(f"\n[done] ok={ok}  fail={fail}")
     return 0 if fail == 0 else 1
@@ -637,22 +638,45 @@ def _resolve_push_carrier(cfg: Config, args: argparse.Namespace) -> tuple:
     return carrier_id, carrier_type_key
 
 
+def _list_git_repos_under(start: Path) -> List[Path]:
+    """递归扫描 start 下所有 git 仓库根目录。"""
+    import os
+
+    skip_dirs = {
+        ".git",
+        ".hg",
+        ".svn",
+        ".idea",
+        ".vscode",
+        ".cursor",
+        "node_modules",
+        ".venv",
+        "venv",
+        "__pycache__",
+    }
+    repos: set[Path] = set()
+    try:
+        for dirpath, dirnames, _ in os.walk(start, topdown=True):
+            if ".git" in dirnames:
+                repos.add(Path(dirpath).resolve())
+                dirnames[:] = []
+                continue
+            dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+    except OSError:
+        return []
+    return sorted(repos, key=lambda p: str(p))
+
+
 def _detect_git(start: Path) -> tuple:
     """探测 start 周围的 git 形态，返回 (provider, [env_lines], summary_str)。
 
     优先级（容器探测优先于 start 自身是 git）：
-    1. start 下有 >=1 个 git 子目录 → local + LOCAL_GIT_REPO_ROOT（容器模式，扫描全部子仓库）
+    1. start 下递归有 >=1 个 git 子目录 → local + LOCAL_GIT_REPO_ROOT（容器模式，扫描全部子仓库）
     2. start 本身是 git → local + LOCAL_GIT_REPO_PATH
     3. 都没有 → none（纯飞书模式）
     """
     start = start.resolve()
-    sub_repos: list = []
-    try:
-        for child in start.iterdir():
-            if child.is_dir() and (child / ".git").exists():
-                sub_repos.append(child)
-    except OSError:
-        pass
+    sub_repos = [p for p in _list_git_repos_under(start) if p != start]
 
     if len(sub_repos) >= 1:
         return (
@@ -663,7 +687,7 @@ def _detect_git(start: Path) -> tuple:
                 "LOCAL_GIT_REMOTE_PREFIX=origin/",
                 "# REPO_ID_MAP=&xxxxx=sub_dir_name  # 飞书「选择仓库」字段用到时再配，可先跑 `repos` 命令拿建议",
             ],
-            f"检测到 git 容器 → 启用 local 容器模式（root={start.name}，含 {len(sub_repos)} 个子仓库，将全部扫描）",
+            f"检测到 git 容器 → 启用 local 容器模式（root={start.name}，递归发现 {len(sub_repos)} 个子仓库，将全部扫描）",
         )
 
     if (start / ".git").exists():
