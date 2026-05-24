@@ -23,6 +23,7 @@ enrichment cross-checks Feishu state with real commits / MRs.
 ## When to invoke this skill
 
 - User asks for 飞书项目周报 / Meego 周报 / 版本进度 / 项目进度
+- User asks in natural language like「生成版本进度同步」「同步版本进度」「看下版本进度」
 - User asks to compare 飞书工作项状态 vs 代码实际进度 (假完成 / 状态滞后 / 延期 / 停滞)
 - User asks to auto-transition Feishu workflow when PR merged to test branch
 - User mentions Meego, 飞书项目, project.feishu.cn MCP
@@ -35,6 +36,16 @@ wizard.** Do NOT run `python -m progress_report_bot init` for end users.
 The user only **types** one secret by hand: **`MEEGO_MCP_TOKEN`**. Every other
 parameter is presented as a **numbered list in chat**; the user replies with a
 number (or "skip").
+
+### Workspace support (generic skill / schedule friendly)
+
+- Default: use current directory as workspace.
+- If current directory has no git workspace, the CLI supports:
+  - `--workspace /abs/path/to/workspace` (recommended for cron/scheduler)
+  - `--choose-workspace` (interactive pick, manual runs)
+- Workspace determines:
+  - where `.env` is read/written
+  - where `data/*.md` and `data/snapshot.json` are generated
 
 ### Step 1 — pick the working directory
 
@@ -129,7 +140,13 @@ Run:
 python -m progress_report_bot run-all
 ```
 
-Read `data/report.md` and `data/diff.md`. Reply with:
+Read the scope-specific outputs, then reply:
+
+- `scope=mine` → `data/report.md`, `data/diff.md`
+- `scope=project` (boss / 管理者视角) → `data/report-boss.md`, `data/diff-boss.md`
+- `scope=all` → `data/report-all.md`, `data/diff-all.md`
+
+Reply with:
 
 - one-line headline (completion %, delayed count, risk count)
 - top 3 critical discrepancies if any
@@ -202,6 +219,10 @@ python -m progress_report_bot sync                             # preview node tr
 python -m progress_report_bot sync --apply
 python -m progress_report_bot repos                            # monorepo mapping diagnose
 python -m progress_report_bot fetch-repos                      # git fetch all sub-repos
+
+# Generic/scheduled usage (explicit workspace)
+python -m progress_report_bot run-all --workspace /path/to/workspace --scope project
+python -m progress_report_bot diff --workspace /path/to/workspace --scope project --use-cache
 ```
 
 **Do NOT run:** `python -m progress_report_bot init` — that is a local terminal
@@ -219,8 +240,8 @@ Add `--use-cache` to skip re-fetching Feishu when iterating on the same snapshot
 
 ## Outputs to surface
 
-- `data/report.md` — boss-view weekly summary
-- `data/diff.md` — discrepancy report
+- `data/report.md` / `data/report-boss.md` / `data/report-all.md` — weekly summary (by scope)
+- `data/diff.md` / `data/diff-boss.md` / `data/diff-all.md` — discrepancy report (by scope)
 - `data/snapshot.json` — raw audit trail
 
 ## Safety rules

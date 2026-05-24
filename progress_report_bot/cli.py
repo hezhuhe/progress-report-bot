@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -43,6 +44,104 @@ def _setup_logging(verbose: bool) -> None:
 
 def _print_json(data) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _is_git_workspace(path: Path) -> bool:
+    """判断目录是否可作为本地 git 工作区（单仓或容器）。"""
+    p = path.resolve()
+    if not p.exists() or not p.is_dir():
+        return False
+    if (p / ".git").exists():
+        return True
+    try:
+        for child in p.iterdir():
+            if child.is_dir() and (child / ".git").exists():
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _discover_workspace_candidates(base: Path) -> List[Path]:
+    """发现可选工作区：当前目录 + 一级子目录中的 git 工作区。"""
+    out: List[Path] = []
+    if _is_git_workspace(base):
+        out.append(base.resolve())
+    try:
+        for child in sorted(base.iterdir()):
+            if child.is_dir() and _is_git_workspace(child):
+                out.append(child.resolve())
+    except OSError:
+        pass
+    # 去重（保序）
+    seen = set()
+    uniq: List[Path] = []
+    for p in out:
+        s = str(p)
+        if s in seen:
+            continue
+        seen.add(s)
+        uniq.append(p)
+    return uniq
+
+
+def _pick_workspace_interactive(base: Path) -> Path:
+    """交互式选择工作区：编号选择候选目录或手输路径。"""
+    candidates = _discover_workspace_candidates(base)
+    print("\n[workspace] 请选择工作目录：")
+    if candidates:
+        for i, p in enumerate(candidates, 1):
+            mark = " (当前目录)" if p == base.resolve() else ""
+            print(f"  {i}. {p}{mark}")
+    else:
+        print("  (当前目录及一级子目录未发现 git 工作区)")
+    print("  0. 手动输入路径")
+    while True:
+        raw = input("输入序号 [1]: ").strip() or "1"
+        if raw == "0":
+            custom = input("请输入工作目录绝对路径: ").strip()
+            if custom:
+                p = Path(custom).expanduser().resolve()
+                if p.exists() and p.is_dir():
+                    return p
+            print("    ! 路径无效，请重试。")
+            continue
+        try:
+            idx = int(raw) - 1
+        except ValueError:
+            print("    ! 请输入有效序号。")
+            continue
+        if 0 <= idx < len(candidates):
+            return candidates[idx]
+        print("    ! 序号超出范围。")
+
+
+def _resolve_workspace(args: argparse.Namespace) -> Path:
+    """解析工作目录：--workspace > --choose-workspace > 自动提示（仅交互）。"""
+    cwd = Path.cwd().resolve()
+    raw = (getattr(args, "workspace", "") or "").strip()
+    if raw:
+        p = Path(raw).expanduser().resolve()
+        if not p.exists() or not p.is_dir():
+            raise RuntimeError(f"--workspace 指定路径无效: {p}")
+        return p
+
+    if bool(getattr(args, "choose_workspace", False)):
+        return _pick_workspace_interactive(cwd)
+
+    # 默认使用当前目录；若当前目录不是 git 工作区，交互场景下允许手工输入工作目录
+    if not _is_git_workspace(cwd) and sys.stdin.isatty():
+        print(
+            "[workspace] 当前目录未检测到 git 工作区。"
+            "可输入工作目录路径（回车继续使用当前目录）。"
+        )
+        custom = input("工作目录路径: ").strip()
+        if custom:
+            p = Path(custom).expanduser().resolve()
+            if not p.exists() or not p.is_dir():
+                raise RuntimeError(f"输入的工作目录路径无效: {p}")
+            return p
+    return cwd
 
 
 # ------------------------------------------------------------
@@ -180,14 +279,26 @@ def _load_snapshot(cfg: Config, use_cache: bool, scope: str = "mine"):
     return fetcher.fetch(persist=True, scope=scope)
 
 
+def _scoped_artifact_paths(cfg: Config, scope: str) -> tuple[Path, Path]:
+    """按采集视角返回 report/diff 输出文件路径。"""
+    out_dir = cfg.ensure_data_dir()
+    scope_norm = (scope or "mine").strip().lower()
+    if scope_norm == "project":
+        return out_dir / "report-boss.md", out_dir / "diff-boss.md"
+    if scope_norm == "all":
+        return out_dir / "report-all.md", out_dir / "diff-all.md"
+    return out_dir / "report.md", out_dir / "diff.md"
+
+
 def cmd_report(cfg: Config, args: argparse.Namespace) -> int:
-    """F1 + F2: fetch → analyze (+ diff) → render → data/report.md。"""
-    snap = _load_snapshot(cfg, args.use_cache, scope=getattr(args, "scope", "mine"))
+    """F1 + F2: fetch → analyze (+ diff) → render → data/report*.md。"""
+    scope = getattr(args, "scope", "mine") or "mine"
+    snap = _load_snapshot(cfg, args.use_cache, scope=scope)
     analyzer = Analyzer(cfg)
     report = analyzer.analyze(snap)
 
     md = render_markdown(report)
-    out_path: Path = cfg.ensure_data_dir() / "report.md"
+    out_path, _ = _scoped_artifact_paths(cfg, scope)
     out_path.write_text(md, encoding="utf-8")
 
     print("\n" + "=" * 70)
@@ -211,14 +322,13 @@ def cmd_report(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
-def _write_local_artifacts(cfg: Config, report: ReportData) -> tuple:
-    """落盘 report.md + diff.md（如果有 diff），返回 (report_path, diff_path|None)。"""
-    out_dir = cfg.ensure_data_dir()
-    md_path = out_dir / "report.md"
+def _write_local_artifacts(cfg: Config, report: ReportData, scope: str = "mine") -> tuple:
+    """落盘 report*.md + diff*.md（如果有 diff），返回 (report_path, diff_path|None)。"""
+    md_path, diff_default_path = _scoped_artifact_paths(cfg, scope)
     md_path.write_text(render_markdown(report), encoding="utf-8")
     diff_path = None
     if report.diff is not None:
-        diff_path = out_dir / "diff.md"
+        diff_path = diff_default_path
         diff_path.write_text(render_diff_markdown(report.diff), encoding="utf-8")
     return md_path, diff_path
 
@@ -226,13 +336,14 @@ def _write_local_artifacts(cfg: Config, report: ReportData) -> tuple:
 def cmd_push(cfg: Config, args: argparse.Namespace) -> int:
     """F1 + F2 + F3: 生成本地 md + （可选）推送评论到飞书。
 
-    **默认行为 = 只生成本地文档**（``data/report.md`` + ``data/diff.md``），
+    **默认行为 = 只生成本地文档**（``data/report*.md`` + ``data/diff*.md``），
     评论是 opt-in：必须显式 ``--apply`` 才会真实推送到飞书工作项。
     """
-    snap = _load_snapshot(cfg, args.use_cache, scope=getattr(args, "scope", "mine"))
+    scope = getattr(args, "scope", "mine") or "mine"
+    snap = _load_snapshot(cfg, args.use_cache, scope=scope)
     report = Analyzer(cfg).analyze(snap)
 
-    md_path, diff_path = _write_local_artifacts(cfg, report)
+    md_path, diff_path = _write_local_artifacts(cfg, report, scope=scope)
 
     dry_run = not bool(args.apply)
     carrier_id, carrier_type_key = _resolve_push_carrier(cfg, args)
@@ -382,11 +493,12 @@ def cmd_fetch_repos(cfg: Config, args: argparse.Namespace) -> int:
 
 def cmd_diff(cfg: Config, args: argparse.Namespace) -> int:
     """F6: 飞书项目状态 ↔ Git 实际进度 对账。"""
-    snap = _load_snapshot(cfg, args.use_cache, scope=getattr(args, "scope", "mine"))
+    scope = getattr(args, "scope", "mine") or "mine"
+    snap = _load_snapshot(cfg, args.use_cache, scope=scope)
     diff = DiffAnalyzer(cfg).analyze(snap)
 
     md = render_diff_markdown(diff)
-    out_path: Path = cfg.ensure_data_dir() / "diff.md"
+    _, out_path = _scoped_artifact_paths(cfg, scope)
     out_path.write_text(md, encoding="utf-8")
 
     print("\n" + "=" * 70)
@@ -881,6 +993,19 @@ def _build_parser() -> argparse.ArgumentParser:
         description="飞书项目进度自动周报机器人",
     )
     p.add_argument("-v", "--verbose", action="store_true", help="开启 DEBUG 日志")
+    p.add_argument(
+        "--workspace",
+        default="",
+        help=(
+            "指定工作目录（该目录下读取 .env 并输出 data/*）。"
+            "适用于通用脚本/定时任务，例如 --workspace /path/to/workspace"
+        ),
+    )
+    p.add_argument(
+        "--choose-workspace",
+        action="store_true",
+        help="启动前交互选择工作目录（当前目录及其一级子目录中可选）",
+    )
 
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -1095,6 +1220,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
+    try:
+        workspace = _resolve_workspace(args)
+        if workspace != Path.cwd().resolve():
+            os.chdir(workspace)
+            print(f"[workspace] 使用工作目录: {workspace}")
+    except RuntimeError as re:
+        print(f"[error] {re}", file=sys.stderr)
+        return 1
+
     cfg = Config.from_env()
 
     pre = _ensure_configured(cfg, args.command)
