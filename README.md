@@ -1,7 +1,7 @@
 # progress-report-bot
 
 > 面向 **Cursor / Claude Code / CLI 自动化** 的飞书项目（Meego）进度对账工具。  
-> 自动生成版本进度周报、识别飞书状态与 Git 实际进展差异，并可按需回写飞书评论。
+> 自动生成版本需求进度、识别飞书状态与 Git 实际进展差异，并可按需回写飞书评论。
 
 默认安全：所有命令先生成本地 `data/*.md`；只有显式 `--apply` 才会写回飞书。
 
@@ -9,9 +9,9 @@
 
 ## 这个工具适合谁
 
-- 项目经理 / 交付经理：想快速拿到“老板视角”进度周报  
+- 项目经理 / 交付经理：想快速拿到“老板视角”版本需求进度  
 - 研发负责人：想核验飞书状态与代码真实推进是否一致  
-- 团队成员：想减少人工周报汇总成本  
+- 团队成员：想减少人工版本进度汇总成本  
 - 平台/效能团队：想把项目进度分析纳入定时任务或自动化流程
 
 ---
@@ -44,9 +44,9 @@
 - “生成版本进度同步”
 - “同步版本进度”
 - “看下版本进度”
-- “跑一下飞书项目周报”
+- “跑一下飞书项目版本需求进度”
 - “看飞书和代码进度是否一致”
-- “给我一版老板视角周报”
+- “给我一版老板视角版本需求进度”
 - “PR 合并到 test 后帮我同步节点”
 
 ---
@@ -167,7 +167,7 @@ progress-report-bot sync --apply
 
 ## Scope 与输出文件命名
 
-| Scope | 含义 | 周报文件 | 对账文件 |
+| Scope | 含义 | 版本需求进度文件 | 差异对账文件 |
 |---|---|---|---|
 | `mine` | 仅本人工作项 | `data/report.md` | `data/diff.md` |
 | `project` | 全项目（老板视角） | `data/report-boss.md` | `data/diff-boss.md` |
@@ -184,7 +184,7 @@ progress-report-bot diff --scope project --use-cache --workspace /path/to/ws
 
 ## 定时任务示例（cron）
 
-每周一早上 9:00 生成老板视角周报：
+每周一早上 9:00 生成老板视角版本需求进度：
 
 ```cron
 0 9 * * 1 /usr/bin/env progress-report-bot run-all --scope project --workspace /path/to/workspace >> /path/to/workspace/data/cron.log 2>&1

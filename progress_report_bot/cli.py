@@ -273,8 +273,14 @@ def _load_snapshot(cfg: Config, use_cache: bool, scope: str = "mine"):
     """use_cache=True 时优先读 data/snapshot.json，不存在则在线拉取。"""
     cache = snapshot_path(cfg.data_dir)
     if use_cache and cache.exists():
-        print(f"[cache] 使用已有快照 → {cache}")
-        return load_snapshot(cache)
+        snap = load_snapshot(cache)
+        if int(getattr(snap, "window_days", 0) or 0) == int(cfg.report_window_days):
+            print(f"[cache] 使用已有快照 → {cache}")
+            return snap
+        print(
+            f"[cache] 已忽略快照（窗口不匹配: cache={snap.window_days}d, "
+            f"current={cfg.report_window_days}d）"
+        )
     fetcher = Fetcher(cfg)
     return fetcher.fetch(persist=True, scope=scope)
 
@@ -719,7 +725,7 @@ def _select_carrier_interactive(cfg: Config) -> tuple:
         print("[warn] 当前项目下未找到你参与的工作项，无法选择评论承载项。")
         return "", ""
     picked = _choose_one(
-        "请选择接收周报评论的工作项（仅列出你参与的工作项）：",
+        "请选择接收版本进度评论的工作项（仅列出你参与的工作项）：",
         items,
         allow_skip=True,
         skip_label="跳过（只生成本地 md，不发评论）",
@@ -859,7 +865,7 @@ def cmd_init(cfg: Config, args: argparse.Namespace) -> int:
     print("\n[3/5] 选择默认采集范围")
     scope_options = [
         {"value": "mine", "label": "mine — 只看本人参与的工作项（快）"},
-        {"value": "project", "label": "project — 扫整个空间（老板周报视角）"},
+        {"value": "project", "label": "project — 扫整个空间（老板/管理者视角）"},
         {"value": "all", "label": "all — 本人 + 全空间合并去重"},
     ]
     default_scope = (cfg.default_scope or "mine").strip().lower()
@@ -895,7 +901,7 @@ def cmd_init(cfg: Config, args: argparse.Namespace) -> int:
             print("  (未能拉取类型列表，使用默认「执行需求」)")
 
     print("\n[4/5] 选择评论承载工作项（可选）")
-    print("       若要把周报发到飞书工作项评论区，从下列「你参与的工作项」中选一个；")
+    print("       若要把版本进度发到飞书工作项评论区，从下列「你参与的工作项」中选一个；")
     print("       选 0 跳过则 push 只生成本地 md。")
     carrier_items = _fetch_user_workitems_in_project(client, project_key)
     carrier_id = ""
@@ -990,9 +996,15 @@ def cmd_sync(cfg: Config, args: argparse.Namespace) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="progress-report-bot",
-        description="飞书项目进度自动周报机器人",
+        description="飞书项目版本需求进度与差异分析机器人",
     )
     p.add_argument("-v", "--verbose", action="store_true", help="开启 DEBUG 日志")
+    p.add_argument(
+        "--window-days",
+        type=int,
+        default=None,
+        help="时间窗口天数；不传默认 7 天（或 .env 的 REPORT_WINDOW_DAYS）",
+    )
     p.add_argument(
         "--workspace",
         default="",
@@ -1230,6 +1242,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     cfg = Config.from_env()
+    if getattr(args, "window_days", None) is not None:
+        if args.window_days <= 0:
+            print("[error] --window-days 必须大于 0", file=sys.stderr)
+            return 1
+        cfg.report_window_days = int(args.window_days)
 
     pre = _ensure_configured(cfg, args.command)
     if pre is not None:

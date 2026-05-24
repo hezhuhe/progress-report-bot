@@ -12,7 +12,7 @@ Manually edit only when changing defaults.
 |---|---|---|
 | `MEEGO_MCP_TOKEN` | yes | Feishu Project MCP auth (`X-Mcp-Token` header) |
 | `MEEGO_PROJECT_KEY` | yes | Feishu space key (24-char hex), e.g. `xxxxxxxxxxxxxxxxxxxxxxxx` |
-| `MEEGO_REPORT_CARRIER_ID` | for `--apply` | Workitem ID that receives the rendered comment |
+| `MEEGO_REPORT_CARRIER_ID` | for `--apply` | Workitem ID that receives the rendered progress/diff comment |
 | `MEEGO_REPORT_CARRIER_TYPE_KEY` | for `--apply` | Workitem type key of the carrier |
 | `MEEGO_FOCUS_WORK_ITEM_ID` | optional | Limit `sync` to one workitem (demo/debug) |
 | `GIT_PROVIDER` | optional | `none` (default) / `local` / `gitlab` / `github` |
@@ -55,9 +55,9 @@ The `diff` command classifies every workitem into at most one kind:
 
 ## Demo (3 min)
 
-1. `python -m progress_report_bot run-all` — local md only, show terminal preview
+1. `progress-report-bot run-all` — local md only, show terminal preview
 2. Open the Feishu carrier workitem comment area (requires `--apply`)
-3. `python -m progress_report_bot sync` — list candidates that can auto-transition
+3. `progress-report-bot sync` — list candidates that can auto-transition
 4. `sync --apply` — confirm Feishu node state changes in real time
 
 ## Verified facts about the Feishu MCP API

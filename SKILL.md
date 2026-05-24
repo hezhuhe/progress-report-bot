@@ -1,10 +1,11 @@
 ---
 name: progress-report-bot
 description: >-
-  Generate weekly version-progress reports from Feishu Project (Meego, 飞书项目)
+  Generate version-progress reports from Feishu Project (Meego, 飞书项目)
   workitems with optional local-git / GitLab / GitHub enrichment, and optionally
   post the rendered Markdown back as a workitem comment that @-mentions owners.
   Use when the user asks about 飞书项目周报 / Meego progress report / 版本进度报告
+  / 版本需求进度 / 版本差异
   / 项目进度对账, when they want to detect 假完成 / 状态滞后 / 延期 / 节点停滞
   between Feishu workitem states and actual git commits/MRs, or when they want
   a merged-to-test PR to auto-transition Feishu workflow nodes (sync). Runs in
@@ -16,14 +17,15 @@ description: >-
 
 # progress-report-bot
 
-Pull workitem progress from Feishu Project (Meego), generate a boss-view weekly
-report, and optionally push it back as a `@`-mentioned comment. Optional git
+Pull workitem progress from Feishu Project (Meego), generate a boss-view
+version-progress report, and optionally push it back as a `@`-mentioned comment. Optional git
 enrichment cross-checks Feishu state with real commits / MRs.
 
 ## When to invoke this skill
 
-- User asks for 飞书项目周报 / Meego 周报 / 版本进度 / 项目进度
+- User asks for 飞书项目周报（别名） / Meego 周报（别名） / 版本进度 / 项目进度
 - User asks in natural language like「生成版本进度同步」「同步版本进度」「看下版本进度」
+- User asks in natural language like「生成版本需求进度」「看版本差异」「最近14天版本进度」
 - User asks to compare 飞书工作项状态 vs 代码实际进度 (假完成 / 状态滞后 / 延期 / 停滞)
 - User asks to auto-transition Feishu workflow when PR merged to test branch
 - User mentions Meego, 飞书项目, project.feishu.cn MCP
@@ -46,6 +48,15 @@ number (or "skip").
 - Workspace determines:
   - where `.env` is read/written
   - where `data/*.md` and `data/snapshot.json` are generated
+
+### Time window support (default 7 days)
+
+- Default time window is 7 days (from `.env` `REPORT_WINDOW_DAYS=7`).
+- If user asks in natural language with a period, e.g.:
+  - 「最近14天版本进度」
+  - 「看近30天差异」
+  parse the number and run commands with `--window-days <N>`.
+- If user does not specify duration, do not ask; keep default 7 days.
 
 ### Step 1 — pick the working directory
 
@@ -105,7 +116,7 @@ Present options (default = 1):
 ```
 请选择采集范围：
 1. mine — 只看本人参与的工作项（快）
-2. project — 扫整个空间（老板周报视角）
+2. project — 扫整个空间（老板/管理者视角）
 3. all — 本人 + 全空间合并
 ```
 
@@ -169,8 +180,8 @@ Require explicit "post" / "send" / "推送" / "发评论" in **this turn**.
 2. Present numbered list in chat:
 
    ```
-   请选择接收周报评论的工作项（仅列出你参与的）：
-   1. #12345 [功能开发] 版本 V5.485 周报承载
+   请选择接收版本进度评论的工作项（仅列出你参与的）：
+   1. #12345 [功能开发] 版本 V5.485 进度承载
    2. #67890 [测试中] 迭代总结
    0. 跳过（只保留本地 md）
    ```
@@ -211,10 +222,12 @@ python -m progress_report_bot types --project-key <key> --json
 python -m progress_report_bot carriers --project-key <key> --json
 
 # Report pipeline
-python -m progress_report_bot run-all                          # local md only
+python -m progress_report_bot run-all                          # local md only (default 7d)
+python -m progress_report_bot run-all --window-days 14         # override to 14d
 python -m progress_report_bot run-all --scope project          # boss view
 python -m progress_report_bot run-all --apply                  # post comment (carrier must be in .env)
 python -m progress_report_bot diff
+python -m progress_report_bot diff --window-days 30
 python -m progress_report_bot sync                             # preview node transitions
 python -m progress_report_bot sync --apply
 python -m progress_report_bot repos                            # monorepo mapping diagnose
@@ -240,7 +253,7 @@ Add `--use-cache` to skip re-fetching Feishu when iterating on the same snapshot
 
 ## Outputs to surface
 
-- `data/report.md` / `data/report-boss.md` / `data/report-all.md` — weekly summary (by scope)
+- `data/report.md` / `data/report-boss.md` / `data/report-all.md` — version-progress summary (by scope)
 - `data/diff.md` / `data/diff-boss.md` / `data/diff-all.md` — discrepancy report (by scope)
 - `data/snapshot.json` — raw audit trail
 
